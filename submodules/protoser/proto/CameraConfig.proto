@@ -1,0 +1,37 @@
+syntax = "proto3";
+package bevfusion;
+
+// 单个相机配置参数
+message CameraConfig {
+    // 相机内参矩阵 (3x3矩阵，按行优先顺序排列)
+    // 格式: fx,0,cx,0,fy,cy,0,0,1
+    repeated float intrinsics = 1;  // 9个浮点数
+    
+    // 相机到激光雷达变换矩阵 (4x4矩阵，按行优先顺序排列)
+    // 格式: m00,m01,m02,m03,m10,m11,m12,m13,m20,m21,m22,m23,m30,m31,m32,m33
+    repeated float camera2lidar = 2;  // 16个浮点数
+    
+    // 激光雷达到图像变换矩阵 (3x4矩阵，按行优先顺序排列)
+    // 格式: m00,m01,m02,m03,m10,m11,m12,m13,m20,m21,m22,m23
+    repeated float lidar2image = 3;  // 12个浮点数
+    
+    // 图像增强矩阵 (3x3矩阵，按行优先顺序排列)
+    // 格式: m00,m01,m02,m10,m11,m12,m20,m21,m22
+    repeated float img_aug_matrix = 4;  // 9个浮点数
+    
+    // 相机归一化参数
+    uint32 image_width = 5;          // 原始图像宽度，默认1600
+    uint32 image_height = 6;         // 原始图像高度，默认900
+    uint32 output_width = 7;         // 输出图像宽度，默认704
+    uint32 output_height = 8;        // 输出图像高度，默认256
+    float resize_lim = 9;            // 缩放限制，默认0.48
+    
+    // 图像归一化参数
+    repeated float mean = 10;        // 均值 [0.485, 0.456, 0.406]
+    repeated float std = 11;         // 标准差 [0.229, 0.224, 0.225]
+    float scale_factor = 12;         // 缩放因子，默认1/255.0
+    float offset = 13;              // 偏移量，默认0.0
+    
+    // 图像插值方法
+    string interpolation = 14;       // 插值方法，"Bilinear" 或 "Nearest"，默认"Bilinear"
+}

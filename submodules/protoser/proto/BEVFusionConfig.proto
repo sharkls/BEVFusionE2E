@@ -1,0 +1,81 @@
+syntax = "proto3";
+package bevfusion;
+
+import "CameraConfig.proto";
+
+// BEVFusion算法主配置
+message BEVFusionConfig {
+    // 基础配置参数
+    float confidence_threshold = 1;     // 置信度阈值，默认0.12
+    bool enable_timer = 2;              // 是否启用计时器，默认true
+    
+    // 相机配置
+    uint32 num_camera = 3;              // 相机数量，默认6
+    repeated CameraConfig cameras = 4;   // 相机配置列表
+    
+    // 模型配置
+    string model_name = 5;              // 模型名称，默认"resnet50int8"
+    string precision = 6;               // 精度类型，默认"int8"
+    
+    // 激光雷达配置
+    LidarConfig lidar_config = 7;
+    
+    // 几何配置
+    GeometryConfig geometry_config = 8;
+    
+    // 后处理配置
+    PostprocessorConfig postprocessor_config = 9;
+    
+    // 模型路径配置
+    ModelPaths model_paths = 10;
+}
+
+// 激光雷达配置参数
+message LidarConfig {
+    // 体素化参数
+    repeated float min_range = 1;       // 最小范围 [-54.0, -54.0, -5.0]
+    repeated float max_range = 2;       // 最大范围 [+54.0, +54.0, +3.0]
+    repeated float voxel_size = 3;      // 体素大小 [0.075, 0.075, 0.2]
+    repeated float grid_size = 4;       // 网格大小 (计算得出)
+    uint32 max_points_per_voxel = 5;   // 每个体素最大点数，默认10
+    uint32 max_points = 6;             // 最大点数，默认300000
+    uint32 max_voxels = 7;             // 最大体素数，默认160000
+    uint32 num_feature = 8;             // 特征数量，默认5
+    
+    // SCN参数
+    string lidar_model_path = 9;        // 激光雷达模型路径
+    string coordinate_order = 10;       // 坐标顺序，默认"XYZ"
+}
+
+// 几何配置参数
+message GeometryConfig {
+    repeated float xbound = 1;          // X边界 [-54.0, 54.0, 0.3]
+    repeated float ybound = 2;          // Y边界 [-54.0, 54.0, 0.3]
+    repeated float zbound = 3;          // Z边界 [-10.0, 10.0, 20.0]
+    repeated float dbound = 4;          // 距离边界 [1.0, 60.0, 0.5]
+    uint32 image_width = 5;             // 图像宽度，默认704
+    uint32 image_height = 6;            // 图像高度，默认256
+    uint32 feat_width = 7;              // 特征宽度，默认88
+    uint32 feat_height = 8;             // 特征高度，默认32
+    uint32 num_camera = 9;              // 相机数量，默认6
+    repeated uint32 geometry_dim = 10;  // 几何维度 [360, 360, 80]
+}
+
+// 后处理配置参数
+message PostprocessorConfig {
+    uint32 out_size_factor = 1;         // 输出尺寸因子，默认8
+    repeated float pc_range = 2;       // 点云范围 [-54.0, -54.0]
+    repeated float post_center_range_start = 3;  // 后处理中心范围起始 [-61.2, -61.2, -10.0]
+    repeated float post_center_range_end = 4;    // 后处理中心范围结束 [61.2, 61.2, 10.0]
+    repeated float voxel_size = 5;      // 体素大小 [0.075, 0.075]
+    bool sorted_bboxes = 6;            // 是否排序边界框，默认true
+}
+
+// 模型路径配置
+message ModelPaths {
+    string camera_backbone_path = 1;   // 相机骨干网络路径
+    string lidar_backbone_path = 2;     // 激光雷达骨干网络路径
+    string fuser_path = 3;             // 融合器路径
+    string head_bbox_path = 4;         // 头部边界框路径
+    string camera_vtransform_path = 5; // 相机视图变换路径
+}
