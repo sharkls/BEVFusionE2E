@@ -95,8 +95,13 @@ export PATH=$TensorRT_Bin:$CUDA_Bin:$PATH
 # 优先使用工程目录下的库，确保链接到正确的 fastdds 和 tinyxml2 库
 # 构建目录必须放在最前面，确保优先使用构建目录中的 libfastddsser.so
 # 过滤掉可能存在的 FastDDS-Demo 路径，避免链接到错误的库
+# 使用相对路径，基于脚本所在目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+THIRDPARTY_FASTDDS_LIB="$PROJECT_ROOT/submodules/thirdparty/fastdds/lib"
+THIRDPARTY_TINYXML2_LIB="$PROJECT_ROOT/submodules/thirdparty/tinyxml2/lib"
 CLEANED_LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -v "FastDDS-Demo" | tr '\n' ':' | sed 's/:$//')
-export LD_LIBRARY_PATH=$BuildDirectory:/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib:$TensorRT_Lib:$CUDA_Lib:$CUDNN_Lib:${CLEANED_LD_LIBRARY_PATH}
+export LD_LIBRARY_PATH=$BuildDirectory:$THIRDPARTY_FASTDDS_LIB:$THIRDPARTY_TINYXML2_LIB:$TensorRT_Lib:$CUDA_Lib:$CUDNN_Lib:${CLEANED_LD_LIBRARY_PATH}
 export PYTHONPATH=$BuildDirectory:$PYTHONPATH
 export ConfigurationStatus=Success
 

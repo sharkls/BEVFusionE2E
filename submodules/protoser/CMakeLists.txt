@@ -1,16 +1,38 @@
-cmake_minimum_required(VERSION 3.10)
+# ProtoSer 子模块 CMakeLists.txt
+cmake_minimum_required(VERSION 3.16)
 
-project(ProtoSer VERSION 0.0.1)
+project(protoser)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# 查找源文件
+file(GLOB_RECURSE PROTO_SRC_FILES 
+  param/*.cc  
+)
 
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/Output/Lib)
+# 创建共享库
+add_library(${PROJECT_NAME} SHARED ${PROTO_SRC_FILES})
 
-# aux_source_directory(./data SRC_FILES)
-aux_source_directory(./param SRC_FILES)
-add_library(${PROJECT_NAME} SHARED ${SRC_FILES})
+# 设置输出目录
+set_target_properties(${PROJECT_NAME} PROPERTIES
+  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
 
-target_link_libraries(${PROJECT_NAME} protobuf)
-target_link_libraries(${PROJECT_NAME} absl_log_internal_check_op)
-target_link_libraries(${PROJECT_NAME} absl_log_internal_message)
+# 包含目录
+target_include_directories(${PROJECT_NAME} PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/param
+)
+
+# 包含 Protobuf 头文件
+target_include_directories(${PROJECT_NAME} PRIVATE
+  ${Protobuf_INCLUDE_DIRS}
+)
+
+# 链接 Protobuf 库
+target_link_libraries(${PROJECT_NAME} 
+  ${Protobuf_LIBRARIES}
+)
+
+# 设置 rpath
+set_target_properties(${PROJECT_NAME} PROPERTIES
+  BUILD_RPATH_USE_ORIGIN TRUE
+)

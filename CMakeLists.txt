@@ -21,20 +21,25 @@
 
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(SET CMP0146 OLD)
-project(bevfusion)
+
+# 顶层项目配置
+project(bevfusion_top)
 
 set(CMAKE_BUILD_PYTHON $ENV{USE_Python})
 set(CMAKE_BUILD_TYPE "Release")
 # set(CMAKE_BUILD_TYPE "Debug")
 set(arch ${CMAKE_HOST_SYSTEM_PROCESSOR})
 
+# 查找依赖包
 find_package(CUDA REQUIRED)
 find_package(Protobuf REQUIRED)
 
-set(spconv_include ../libraries/3DSparseConvolution/libspconv/include)
-set(spconv_lib ../libraries/3DSparseConvolution/libspconv/lib/${arch}_cuda$ENV{SPCONV_CUDA_VERSION})
+# spconv 配置（使用相对路径）
+set(spconv_include ${CMAKE_SOURCE_DIR}/submodules/thirdparty/3DSparseConvolution/libspconv/include)
+set(spconv_lib ${CMAKE_SOURCE_DIR}/submodules/thirdparty/3DSparseConvolution/libspconv/lib/${arch}_cuda$ENV{SPCONV_CUDA_VERSION})
 message(STATUS "spconv_lib = ${spconv_lib}")
 
+# 编译选项
 if("$ENV{SPCONV_CUDA_VERSION}" EQUAL "11.4")
   # For cuda 11.x
   set(CMAKE_CXX_FLAGS_RELEASE "-std=c++14 -Wextra -Wall -Wno-missing-field-initializers -Wno-deprecated-declarations -O3 -DENABLE_TEXT_BACKEND_STB -Wno-unused-parameter")
@@ -45,7 +50,7 @@ else()
   set(CMAKE_CXX_FLAGS_DEBUG   "-std=c++17 -O0 -g -DENABLE_TEXT_BACKEND_STB")
 endif()
 
-# Set CUDA SM architecture; default to 86 if env CUDASM is empty
+# CUDA 架构设置
 if("$ENV{CUDASM}" STREQUAL "")
   set(CUDA_ARCH 86)
 else()
@@ -56,180 +61,76 @@ set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}
   -gencode arch=compute_${CUDA_ARCH},code=compute_${CUDA_ARCH}
 )
 
+# 全局包含目录
 include_directories(
   ${Protobuf_INCLUDE_DIRS}
   $ENV{CUDA_Inc}
   $ENV{TensorRT_Inc}
   $ENV{Python_Inc}
-  ../dependencies/stb
-  ../dependencies/dlpack/include
-  ../dependencies/pybind11/include
-  ../libraries/cuOSD/src
+  ${CMAKE_SOURCE_DIR}/../dependencies/stb
+  ${CMAKE_SOURCE_DIR}/../dependencies/dlpack/include
+  ${CMAKE_SOURCE_DIR}/../dependencies/pybind11/include
+  ${CMAKE_SOURCE_DIR}/../libraries/cuOSD/src
   ${spconv_include}
-  src/common
-  src/
-  submodules/fastddsser/data
-  /share/Code/Lidar_AI_Solution/libraries/fastdds/include
-  /share/Code/Lidar_AI_Solution/libraries/tinyxml2/include
+  ${CMAKE_SOURCE_DIR}/src/common
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/submodules/fastddsser/data
+  ${CMAKE_SOURCE_DIR}/submodules/thirdparty/fastdds/include
+  ${CMAKE_SOURCE_DIR}/submodules/thirdparty/tinyxml2/include
 )
 
+# 全局链接目录
 link_directories(
   $ENV{CUDA_Lib}
   $ENV{TensorRT_Lib}
   ${spconv_lib}
-  build
+  ${CMAKE_BINARY_DIR}
   $ENV{Python_Lib}
-  /share/Code/Lidar_AI_Solution/libraries/fastdds/lib
-  /share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib
+  ${CMAKE_SOURCE_DIR}/submodules/thirdparty/fastdds/lib
+  ${CMAKE_SOURCE_DIR}/submodules/thirdparty/tinyxml2/lib
 )
 
-file(GLOB_RECURSE CORE_FILES 
-  src/bevfusion/*.cu 
-  src/bevfusion/*.cpp
-  src/onnx/*.cpp
-  src/common/tensor.cu
-  src/common/tensorrt.cpp
-)
+# 将 spconv_include 传递给子项目
+set(spconv_include ${spconv_include} CACHE INTERNAL "spconv include directory")
 
+#######################################################################
+# 添加子模块
+#######################################################################
+
+# 添加 fastddsser 子模块
+add_subdirectory(submodules/fastddsser)
+
+# 添加 protoser 子模块
+add_subdirectory(submodules/protoser)
+
+# 添加 bevfusion 核心库（src 目录下的项目）
+add_subdirectory(src)
+
+#######################################################################
+# 测试程序
+#######################################################################
+
+# 可视化相关文件
 file(GLOB_RECURSE VISUALIZE_FILES 
-  ../libraries/cuOSD/src/*.cpp
-  ../libraries/cuOSD/src/*.cu
-  src/common/visualize.cu
+  ${CMAKE_SOURCE_DIR}/../libraries/cuOSD/src/*.cpp
+  ${CMAKE_SOURCE_DIR}/../libraries/cuOSD/src/*.cu
+  ${CMAKE_SOURCE_DIR}/src/common/visualize.cu
 )
 
-####################### libfastddsser.so ##########################
-file(GLOB_RECURSE FASTDDS_SRC_FILES 
-  submodules/fastddsser/data/*.cxx
-)
-
-add_library(fastddsser SHARED ${FASTDDS_SRC_FILES})
-
-# 使用工程目录下的库，而不是系统其他位置的库
-target_link_libraries(fastddsser 
-  /share/Code/Lidar_AI_Solution/libraries/fastdds/lib/libfastcdr.so
-  /share/Code/Lidar_AI_Solution/libraries/fastdds/lib/libfastrtps.so
-  /share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib/libtinyxml2.so
-)
-
-# 设置 rpath，确保运行时使用工程目录下的库
-set_target_properties(fastddsser PROPERTIES
-  BUILD_RPATH "/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib"
-  INSTALL_RPATH "/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib"
-)
-
-target_include_directories(fastddsser PUBLIC
-  submodules/fastddsser/data
-)
-
-####################### libprotoser.so ##########################
-file(GLOB_RECURSE PROTO_SRC_FILES 
-  submodules/protoser/param/*.cc  
-)
-
-add_library(protoser SHARED ${PROTO_SRC_FILES})
-
-# 使用工程目录下的库
-target_link_libraries(protoser 
-  /share/Code/Lidar_AI_Solution/libraries/fastdds/lib/libfastcdr.so
-  /share/Code/Lidar_AI_Solution/libraries/fastdds/lib/libfastrtps.so
-  /share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib/libtinyxml2.so
-)
-
-# 设置 rpath
-set_target_properties(protoser PROPERTIES
-  BUILD_RPATH "/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib"
-  INSTALL_RPATH "/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib"
-)
-
-target_include_directories(protoser PUBLIC
-  submodules/protoser/param
-)
-
-#######################################################################
-
-####################### libbevfusion_alg.so ##########################
-cuda_add_library(bevfusion_alg SHARED 
-  ${CORE_FILES}
-  src/bevfusion/bevfusion.cpp
-  src/bevfusion_alg_implement.cpp
-  submodules/protoser/param/BEVFusionConfig.pb.cc
-  submodules/protoser/param/CameraConfig.pb.cc
-)
-
-target_link_libraries(bevfusion_alg
-  libcudart.so
-  libcublasLt.so
-  libnvinfer.so
-  libspconv.so
-  ${Protobuf_LIBRARIES}
-  libnvinfer_plugin.so
-  fastddsser
-)
-#######################################################################
-
-
-####################### test_bevfusion_alg program #############################
+# 创建测试可执行文件
 cuda_add_executable(test_bevfusion_alg 
   test_bevfusion_alg.cpp
   ${VISUALIZE_FILES}
 )
 
-# 设置 rpath，优先使用构建目录和工程目录下的库
-# 使用 $ORIGIN 确保相对路径正确，构建目录必须放在最前面
+# 设置 rpath，确保运行时能找到所有依赖库（使用相对路径）
 set_target_properties(test_bevfusion_alg PROPERTIES
-  BUILD_RPATH "$ORIGIN:${CMAKE_BINARY_DIR}:/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib"
-  INSTALL_RPATH "$ORIGIN:${CMAKE_BINARY_DIR}:/share/Code/Lidar_AI_Solution/libraries/fastdds/lib:/share/Code/Lidar_AI_Solution/libraries/tinyxml2/lib"
+  BUILD_RPATH "$ORIGIN:${CMAKE_BINARY_DIR}:${CMAKE_SOURCE_DIR}/submodules/thirdparty/fastdds/lib:${CMAKE_SOURCE_DIR}/submodules/thirdparty/tinyxml2/lib"
+  INSTALL_RPATH "$ORIGIN:${CMAKE_BINARY_DIR}:${CMAKE_SOURCE_DIR}/submodules/thirdparty/fastdds/lib:${CMAKE_SOURCE_DIR}/submodules/thirdparty/tinyxml2/lib"
   BUILD_RPATH_USE_ORIGIN TRUE
 )
 
+# 链接库（只需要链接 bevfusion，它会自动传递依赖）
 target_link_libraries(test_bevfusion_alg
-  fastddsser
-  bevfusion_alg
-  libnvinfer.so
-  libspconv.so
-  ${Protobuf_LIBRARIES}
-  libnvinfer_plugin.so
+  bevfusion
 )
-#######################################################################
-
-
-########################## custom_layernorm.so ################################
-# 为custom_layernorm设置CUDA包含路径
-set(CUSTOM_LAYERNORM_NVCC_FLAGS ${CUDA_NVCC_FLAGS})
-if(DEFINED ENV{TensorRT_Inc} AND NOT "$ENV{TensorRT_Inc}" STREQUAL "")
-  set(CUSTOM_LAYERNORM_NVCC_FLAGS "${CUSTOM_LAYERNORM_NVCC_FLAGS} -I$ENV{TensorRT_Inc}")
-endif()
-if(DEFINED ENV{CUDA_Inc} AND NOT "$ENV{CUDA_Inc}" STREQUAL "")
-  set(CUSTOM_LAYERNORM_NVCC_FLAGS "${CUSTOM_LAYERNORM_NVCC_FLAGS} -I$ENV{CUDA_Inc}")
-endif()
-
-cuda_add_library(custom_layernorm SHARED
-  src/plugins/custom_layernorm.cu
-)
-
-set_target_properties(custom_layernorm PROPERTIES
-  CUDA_NVCC_FLAGS "${CUSTOM_LAYERNORM_NVCC_FLAGS}"
-)
-
-target_link_libraries(custom_layernorm
-  libnvinfer.so
-  libnvinfer_plugin.so
-)
-#######################################################################
-
-
-########################## libpybev.so ################################
-if(CMAKE_BUILD_PYTHON STREQUAL "ON")
-  cuda_add_library(pybev SHARED
-    src/python.cpp
-  )
-  target_link_libraries(pybev
-    bevfusion_core
-    libnvinfer.so
-    libspconv.so
-    ${Protobuf_LIBRARIES}
-    libnvinfer_plugin.so
-    $ENV{Python_Soname}
-  )
-endif()
-#######################################################################

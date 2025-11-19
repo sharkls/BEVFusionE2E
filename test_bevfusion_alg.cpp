@@ -34,7 +34,10 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
-#include "src/export_bevfusion_alglib.h"
+// 使用 bevfusion 库对外暴露的接口
+#include "export_bevfusion_alglib.h"
+
+// 测试程序内部使用的头文件（可视化功能）
 #include "src/common/check.hpp"
 #include "src/common/tensor.hpp"
 #include "src/common/timer.hpp"
