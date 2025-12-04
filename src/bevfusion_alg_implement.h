@@ -15,6 +15,7 @@
 #include <vector>
 #include <cstdint>
 #include <filesystem>
+#include "CTimeMatchSrcData.h"
 
 // 配置参数结构体 - 从protobuf配置文件加载
 struct BEVFusionConfig {
@@ -102,5 +103,19 @@ private:
     
     // 将检测结果转换为CAlgResult格式
     void convertBBoxesToResult(const std::vector<bevfusion::head::transbbox::BoundingBox>& bboxes, CAlgResult& result);
+    
+    // 数据验证函数
+    bool validateInputData(const CTimeMatchSrcData* input_data);
+    
+    // 数据转换函数：从CTimeMatchSrcData转换为算法所需格式
+    bool convertInputData(const CTimeMatchSrcData* input_data, 
+                         std::vector<std::vector<unsigned char>>& image_buffers,
+                         std::vector<unsigned char*>& images,
+                         std::vector<nvtype::half>& lidar_points_buffer,
+                         nvtype::half*& lidar_points,
+                         int& num_points);
+    
+    // 模型预热函数：使用模拟数据进行一次推理，初始化 CUDA kernels 和缓存
+    bool warmupModel(const BEVFusionConfig& config);
 };
 

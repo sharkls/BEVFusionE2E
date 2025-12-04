@@ -21,16 +21,16 @@ struct IBEVFusionAlg
     // 初始化算法接口对象，内部主要处理只需初始化一次的操作，比如模型加载之类的，成功返回true，失败返回false
     virtual bool initAlgorithm(const std::string exe_path, const AlgCallback& alg_cb, void* hd) = 0;
 
-    // 执行算法函数，传入原始数据体，算法执行成功返回处理后的数据或者检测结果（由算法类型而定），失败返回nullptr
+    // 执行算法函数，传入原始数据体（内部期望为CTimeMatchSrcData*类型），算法执行成功返回处理后的数据或者检测结果（由算法类型而定），失败返回nullptr
     virtual void runAlgorithm(void* p_pSrcData) = 0;
 };
 
-// 输入数据结构 - 统一在头文件中定义
-struct BEVFusionInputData {
-    std::vector<unsigned char*> images;
-    nvtype::half* lidar_points;
-    int num_points;
-};
+// 输入数据结构 - 已废弃，现在使用CTimeMatchSrcData格式
+// struct BEVFusionInputData {
+//     std::vector<unsigned char*> images;
+//     nvtype::half* lidar_points;
+//     int num_points;
+// };
 
 // 创建BEVFusion算法对象的工厂函数
 extern "C" __attribute__ ((visibility("default"))) IBEVFusionAlg* CreateBEVFusionAlgObj(const std::string& p_strExePath);

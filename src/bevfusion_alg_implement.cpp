@@ -12,8 +12,11 @@
 #include <fstream>
 #include <filesystem>
 #include <google/protobuf/text_format.h>
-#include "../submodules/protoser/param/BEVFusionConfig.pb.h"
+#include "BEVFusionConfig.pb.h"
 #include <dlfcn.h>
+#include <algorithm>
+#include <cstring>
+#include <cuda_fp16.h>
 
 // 构造函数
 BEVFusionAlgImplement::BEVFusionAlgImplement() 
@@ -135,8 +138,150 @@ bool BEVFusionAlgImplement::initAlgorithm(const std::string exe_path, const AlgC
         printf("Warning: Camera matrix data incomplete, skipping update.\n");
     }
     
+    // 模型预热：使用模拟数据进行一次推理，初始化 CUDA kernels 和缓存
+    printf("Performing model warmup (initializing CUDA kernels and cache)...\n");
+    if (!warmupModel(config)) {
+        printf("Warning: Model warmup failed, but continuing initialization.\n");
+    } else {
+        printf("Model warmup completed successfully.\n");
+    }
+    
     printf("BEVFusion algorithm initialized successfully with confidence_threshold=%.3f, timer=%s.\n", 
            config.confidence_threshold, config.enable_timer ? "enabled" : "disabled");
+    return true;
+}
+
+// 数据验证函数
+bool BEVFusionAlgImplement::validateInputData(const CTimeMatchSrcData* input_data) {
+    if (input_data == nullptr) {
+        printf("Error: Input data pointer is null.\n");
+        return false;
+    }
+    
+    // 验证图像数据
+    const auto& video_data = input_data->vecVideoSrcData();
+    if (video_data.empty()) {
+        printf("Error: No video source data provided.\n");
+        return false;
+    }
+    
+    // 验证每个相机的图像数据
+    for (size_t i = 0; i < video_data.size(); ++i) {
+        const auto& video = video_data[i];
+        const auto& image_buf = video.vecImageBuf();
+        
+        if (image_buf.empty()) {
+            printf("Error: Camera %zu has empty image buffer.\n", i);
+            return false;
+        }
+        
+        uint32_t expected_bytes = video.usBmpWidth() * video.usBmpLength() * 3; // RGB格式
+        if (image_buf.size() < expected_bytes) {
+            printf("Warning: Camera %zu image buffer size (%zu) is less than expected (%u).\n", 
+                   i, image_buf.size(), expected_bytes);
+        }
+    }
+    
+    // 验证点云数据
+    const auto& lidar_data = input_data->lidar_data();
+    uint32_t num_points = lidar_data.num_points();
+    const auto& points = lidar_data.points();
+    
+    if (num_points == 0) {
+        printf("Error: No lidar points provided.\n");
+        return false;
+    }
+    
+    // 点云格式应该是 [x, y, z, intensity, ring] * num_points，即5维
+    uint32_t expected_points_size = num_points * 5;
+    if (points.size() < expected_points_size) {
+        printf("Error: Lidar points size (%zu) is less than expected (%u). Expected format: [x, y, z, intensity, ring] * num_points.\n", 
+               points.size(), expected_points_size);
+        return false;
+    }
+    
+    printf("Input data validation passed: %zu cameras, %u lidar points.\n", 
+           video_data.size(), num_points);
+    return true;
+}
+
+// 数据转换函数：从CTimeMatchSrcData转换为算法所需格式
+bool BEVFusionAlgImplement::convertInputData(const CTimeMatchSrcData* input_data,
+                                             std::vector<std::vector<unsigned char>>& image_buffers,
+                                             std::vector<unsigned char*>& images,
+                                             std::vector<nvtype::half>& lidar_points_buffer,
+                                             nvtype::half*& lidar_points,
+                                             int& num_points) {
+    if (input_data == nullptr) {
+        return false;
+    }
+    
+    // 1. 转换图像数据：从CVideoSrcData提取图像指针
+    const auto& video_data = input_data->vecVideoSrcData();
+    images.clear();
+    images.reserve(video_data.size());
+    image_buffers.clear();
+    image_buffers.reserve(video_data.size());
+    
+    for (size_t i = 0; i < video_data.size(); ++i) {
+        const auto& video = video_data[i];
+        const auto& image_buf = video.vecImageBuf();
+        
+        if (image_buf.empty()) {
+            printf("Warning: Camera %zu has empty image buffer, skipping.\n", i);
+            continue;
+        }
+        
+        // 复制图像数据到临时缓冲区（确保数据在算法执行期间有效）
+        image_buffers.emplace_back(image_buf.begin(), image_buf.end());
+        images.push_back(image_buffers.back().data());
+    }
+    
+    if (images.empty()) {
+        printf("Error: No valid image data after conversion.\n");
+        return false;
+    }
+    
+    // 2. 转换点云数据：从float转换为half类型
+    const auto& lidar_data = input_data->lidar_data();
+    num_points = static_cast<int>(lidar_data.num_points());
+    const auto& points = lidar_data.points();
+    
+    if (num_points == 0 || points.empty()) {
+        printf("Error: No lidar points data.\n");
+        return false;
+    }
+    
+    // 点云格式：[x, y, z, intensity, ring] * num_points
+    // 算法期望：half类型的点云数据，格式相同
+    size_t points_per_point = 5; // x, y, z, intensity, ring
+    size_t total_elements = num_points * points_per_point;
+    
+    if (points.size() < total_elements) {
+        printf("Error: Points array size (%zu) is less than expected (%zu).\n", 
+               points.size(), total_elements);
+        return false;
+    }
+    
+    // 分配缓冲区并转换float到half
+    lidar_points_buffer.clear();
+    lidar_points_buffer.reserve(total_elements);
+    
+    for (size_t i = 0; i < total_elements; ++i) {
+        // 使用CUDA的__float2half函数进行转换
+        __half h = __float2half(points[i]);
+        nvtype::half nh;
+        // 使用reinterpret_cast获取__half的内部值（因为__x是protected成员）
+        // __half 和 nvtype::half 在内存中的布局相同，都包含一个 unsigned short
+        unsigned short half_value = *reinterpret_cast<unsigned short*>(&h);
+        nh.__x = half_value;
+        lidar_points_buffer.push_back(nh);
+    }
+    
+    lidar_points = lidar_points_buffer.data();
+    
+    printf("Data conversion completed: %zu images, %d lidar points.\n", 
+           images.size(), num_points);
     return true;
 }
 
@@ -147,26 +292,49 @@ void BEVFusionAlgImplement::runAlgorithm(void* p_pSrcData) {
         return;
     }
     
-    // 解析输入数据
-    BEVFusionInputData* input_data = static_cast<BEVFusionInputData*>(p_pSrcData);
-    if (input_data == nullptr) {
+    if (p_pSrcData == nullptr) {
         printf("Invalid input data pointer.\n");
         return;
     }
     
-    // 执行BEVFusion推理
+    // 将void*转换为CTimeMatchSrcData*
+    CTimeMatchSrcData* input_data = static_cast<CTimeMatchSrcData*>(p_pSrcData);
+    if (input_data == nullptr) {
+        printf("Error: Failed to cast input data to CTimeMatchSrcData*.\n");
+        return;
+    }
+    
+    // 1. 验证输入数据
+    if (!validateInputData(input_data)) {
+        printf("Input data validation failed.\n");
+        return;
+    }
+    
+    // 2. 转换输入数据
+    std::vector<std::vector<unsigned char>> image_buffers;  // 管理图像数据生命周期
+    std::vector<unsigned char*> images;
+    std::vector<nvtype::half> lidar_points_buffer;
+    nvtype::half* lidar_points = nullptr;
+    int num_points = 0;
+    
+    if (!convertInputData(input_data, image_buffers, images, lidar_points_buffer, lidar_points, num_points)) {
+        printf("Input data conversion failed.\n");
+        return;
+    }
+    
+    // 3. 执行BEVFusion推理
     std::vector<bevfusion::head::transbbox::BoundingBox> bboxes = core_->forward(
-        (const unsigned char**)input_data->images.data(), 
-        input_data->lidar_points, 
-        input_data->num_points, 
+        (const unsigned char**)images.data(), 
+        lidar_points, 
+        num_points, 
         stream_
     );
     
-    // 转换结果为CAlgResult格式
+    // 4. 转换结果为CAlgResult格式
     CAlgResult result;
     convertBBoxesToResult(bboxes, result);
     
-    // 调用回调函数返回结果
+    // 5. 调用回调函数返回结果
     if (alg_callback_) {
         alg_callback_(result, handle_);
     }
@@ -609,6 +777,107 @@ std::shared_ptr<bevfusion::Core> BEVFusionAlgImplement::create_core_with_config(
     param.camera_vtransform = config.camera_vtransform_path;
     
     return bevfusion::create_core(param);
+}
+
+// 模型预热函数：使用模拟数据进行一次推理，初始化 CUDA kernels 和缓存
+bool BEVFusionAlgImplement::warmupModel(const BEVFusionConfig& config) {
+    if (!core_ || !stream_) {
+        printf("Error: Core or stream not initialized, cannot perform warmup.\n");
+        return false;
+    }
+    
+    // 1. 创建模拟图像数据（从BEVFusionConfig中的相机配置读取参数）
+    // 使用第一个相机的图像尺寸，如果没有则使用默认值
+    int image_width = 1600;
+    int image_height = 900;
+    if (!config.image_widths.empty() && !config.image_heights.empty()) {
+        image_width = static_cast<int>(config.image_widths[0]);
+        image_height = static_cast<int>(config.image_heights[0]);
+    }
+    const int image_channels = 3;  // RGB格式
+    const size_t image_size = image_width * image_height * image_channels;
+    
+    std::vector<std::vector<unsigned char>> image_buffers(config.num_camera);
+    std::vector<unsigned char*> image_ptrs(config.num_camera);
+    
+    // 使用中等灰度值填充图像
+    const unsigned char fill_value = 128;
+    for (uint32_t i = 0; i < config.num_camera; ++i) {
+        image_buffers[i].resize(image_size, fill_value);
+        image_ptrs[i] = image_buffers[i].data();
+    }
+    
+    // 2. 创建模拟点云数据（从BEVFusionConfig中的激光雷达配置读取参数）
+    // 使用合理的点云数量（max_points的10%或20000，取较小值）
+    const int num_points = static_cast<int>(std::min(static_cast<uint32_t>(20000), config.max_points / 10));
+    const int num_features = static_cast<int>(config.num_feature);
+    const size_t points_size = num_points * num_features;
+    
+    // 从激光雷达配置读取点云范围
+    float x_min = config.lidar_min_range.size() >= 1 ? config.lidar_min_range[0] : -54.0f;
+    float x_max = config.lidar_max_range.size() >= 1 ? config.lidar_max_range[0] : 54.0f;
+    float y_min = config.lidar_min_range.size() >= 2 ? config.lidar_min_range[1] : -54.0f;
+    float y_max = config.lidar_max_range.size() >= 2 ? config.lidar_max_range[1] : 54.0f;
+    float z_min = config.lidar_min_range.size() >= 3 ? config.lidar_min_range[2] : -5.0f;
+    float z_max = config.lidar_max_range.size() >= 3 ? config.lidar_max_range[2] : 3.0f;
+    
+    // 强度和ring使用合理的默认范围
+    float intensity_min = 0.0f;
+    float intensity_max = 1.0f;
+    float ring_min = 0.0f;
+    float ring_max = 31.0f;
+    
+    std::vector<nvtype::half> lidar_points_buffer;
+    lidar_points_buffer.reserve(points_size);
+    
+    // 使用 CUDA 的 __float2half 转换函数
+    for (int i = 0; i < num_points; ++i) {
+        // 生成模拟点云数据：在配置的范围内分布
+        float x = x_min + (i % 100) * (x_max - x_min) / 99.0f;
+        float y = y_min + (i / 100) * (y_max - y_min) / (num_points / 100.0f);
+        float z = z_min + (i % 50) * (z_max - z_min) / 49.0f;
+        float intensity = intensity_min + (i % 100) * (intensity_max - intensity_min) / 99.0f;
+        float ring = ring_min + (i % 32) * (ring_max - ring_min) / 31.0f;
+        
+        // 转换为 half 类型
+        __half h_x = __float2half(x);
+        __half h_y = __float2half(y);
+        __half h_z = __float2half(z);
+        __half h_intensity = __float2half(intensity);
+        __half h_ring = __float2half(ring);
+        
+        // 复制到 nvtype::half
+        nvtype::half nh_x, nh_y, nh_z, nh_intensity, nh_ring;
+        *reinterpret_cast<unsigned short*>(&nh_x.__x) = *reinterpret_cast<unsigned short*>(&h_x);
+        *reinterpret_cast<unsigned short*>(&nh_y.__x) = *reinterpret_cast<unsigned short*>(&h_y);
+        *reinterpret_cast<unsigned short*>(&nh_z.__x) = *reinterpret_cast<unsigned short*>(&h_z);
+        *reinterpret_cast<unsigned short*>(&nh_intensity.__x) = *reinterpret_cast<unsigned short*>(&h_intensity);
+        *reinterpret_cast<unsigned short*>(&nh_ring.__x) = *reinterpret_cast<unsigned short*>(&h_ring);
+        
+        lidar_points_buffer.push_back(nh_x);
+        lidar_points_buffer.push_back(nh_y);
+        lidar_points_buffer.push_back(nh_z);
+        lidar_points_buffer.push_back(nh_intensity);
+        lidar_points_buffer.push_back(nh_ring);
+    }
+    
+    // 3. 执行预热推理
+    try {
+        std::vector<bevfusion::head::transbbox::BoundingBox> warmup_bboxes = core_->forward(
+            (const unsigned char**)image_ptrs.data(),
+            lidar_points_buffer.data(),
+            num_points,
+            stream_
+        );
+        
+        // 同步 CUDA 流，确保预热完成
+        cudaStreamSynchronize(stream_);
+        
+        return true;
+    } catch (...) {
+        printf("Error: Exception occurred during model warmup.\n");
+        return false;
+    }
 }
 
 // 创建BEVFusion算法对象的工厂函数
